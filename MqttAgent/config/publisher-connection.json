@@ -18,7 +18,7 @@
       "SecurityGroupId": "",
       "MaxNetworkMessageSize": 0,
       "WriterGroupId": 1,
-      "PublishingInterval": 60000,
+      "PublishingInterval": 15000,
       "KeepAliveTime": 0,
       "Priority": 0,
       "TransportSettings": {

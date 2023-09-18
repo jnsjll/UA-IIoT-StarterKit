@@ -1,13 +1,13 @@
-﻿using Microsoft.Extensions.CommandLineUtils;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Threading;
+using Microsoft.Extensions.CommandLineUtils;
 using MqttAgent.Server;
 using Opc.Ua;
 using Opc.Ua.PubSub;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Threading;
-using System.Linq;
 
 namespace MqttAgent
 {
@@ -81,9 +81,6 @@ namespace MqttAgent
                 // Create the UA Publisher application using configuration file
                 using (UaPubSubApplication application = UaPubSubApplication.Create(configuration, managers))
                 {
-                    Console.WriteLine($"Publishing to {GetConnectionUrl(connection)}.");
-                    application.Start();
-
                     Console.WriteLine("Starting OPC UA server.");
                     server.Start(useGPIO).Wait();
 
@@ -93,6 +90,10 @@ namespace MqttAgent
                     {
                         ii.Start();
                     }
+
+                    // start UaPubSubApplication after OpcUa server / client to avoid timeouts due to thread pool exhaustion
+                    Console.WriteLine($"Publishing to {GetConnectionUrl(connection)}.");
+                    application.Start();
 
                     Console.WriteLine("Press [X] to stop the program.");
                     HandleKeyPress();
@@ -220,7 +221,7 @@ namespace MqttAgent
 
                         var dataset = e.NetworkMessage.DataSetMessages[0];
                         Console.WriteLine("");
-                        Console.WriteLine($"Received SequenceNumber '{((dataset.SequenceNumber == 0)?"[Not In Message]":dataset.SequenceNumber.ToString())}' From ({e.Source}).");
+                        Console.WriteLine($"Received SequenceNumber '{((dataset.SequenceNumber == 0) ? "[Not In Message]" : dataset.SequenceNumber.ToString())}' From ({e.Source}).");
 
                         foreach (var field in dataset.DataSet.Fields)
                         {
@@ -460,24 +461,38 @@ namespace MqttAgent
                 switch (dataset.Name)
                 {
                     case "identity":
-                    {
-                        ioManagers[dataset.Name] = new VendorNameplateManager(id++, dataset, options.NameplateFilePath, options.ApplicationId);
-                        break;
-                    }
+                        {
+                            ioManagers[dataset.Name] = new VendorNameplateManager(id++, dataset, options.NameplateFilePath, options.ApplicationId);
+
+                            for (ushort i = _copiesFrom; i <= _copiesTo; i++)
+                            {
+                                var dataSetCopy = new DataSetMetaDataType()
+                                {
+                                    Name = $"{dataset.Name}_{i}",
+                                    Description = dataset.Description,
+                                    Fields = new FieldMetaDataCollection(dataset.Fields),
+                                    DataSetClassId = dataset.DataSetClassId,
+                                    ConfigurationVersion = dataset.ConfigurationVersion
+                                };
+                                ioManagers[$"{dataset.Name}_{i}"] = new VendorNameplateManager(id++, dataSetCopy, options.NameplateFilePath, options.ApplicationId);
+                            }
+
+                            break;
+                        }
 
                     default:
-                    {
-                        if (client != null)
                         {
-                            ioManagers[dataset.Name] = new IOUAClient(id++, dataset, client);
-                        }
-                        else
-                        {
-                            ioManagers[dataset.Name] = new IOSimulator(id++, dataset);
-                        }
+                            if (client != null)
+                            {
+                                ioManagers[dataset.Name] = new IOUAClient(id++, dataset, client);
+                            }
+                            else
+                            {
+                                ioManagers[dataset.Name] = new IOSimulator(id++, dataset);
+                            }
 
-                        break;
-                    }
+                            break;
+                        }
                 }
             }
 
@@ -546,6 +561,45 @@ namespace MqttAgent
                 connection.ConnectionProperties = properties;
             }
 
+            var identityWriterGroup = connection.WriterGroups.First(x => x.Name == "identity");
+            var identityWriterGroupText = EncodeWriterGroup(identityWriterGroup);
+
+            for (ushort i = _copiesFrom; i <= _copiesTo; i++)
+            {
+                var copy = CreateIdentityWriterGroupCopy(identityWriterGroupText, i);
+                connection.WriterGroups.Add(copy);
+            }
+
+            static string EncodeWriterGroup(WriterGroupDataType identityWriterGroup)
+            {
+                using (var encoder = new JsonEncoder(ServiceMessageContext.GlobalContext, true))
+                {
+                    identityWriterGroup.Encode(encoder);
+                    return encoder.CloseAndReturnText();
+                }
+            }
+
+            static WriterGroupDataType CreateIdentityWriterGroupCopy(string identityWriterGroupText, ushort i)
+            {
+                var identityWriterGroupCopy = new WriterGroupDataType();
+
+                using (var decoder = new JsonDecoder(identityWriterGroupText, ServiceMessageContext.GlobalContext))
+                {
+                    identityWriterGroupCopy.Decode(decoder);
+                }
+
+                identityWriterGroupCopy.Name = $"{identityWriterGroupCopy.Name}_{i}";
+
+                var writer = identityWriterGroupCopy.DataSetWriters.First();
+                writer.Name = identityWriterGroupCopy.Name;
+                writer.DataSetName = identityWriterGroupCopy.Name;
+                writer.DataSetWriterId = i;
+                var transportDataType = writer.TransportSettings.Body as BrokerDataSetWriterTransportDataType;
+                transportDataType.QueueName = $"{transportDataType.QueueName}_{i}";
+
+                return identityWriterGroupCopy;
+            }
+
             // replace intial datasets with the last version cached.
             if (datasets != null)
             {
@@ -569,6 +623,9 @@ namespace MqttAgent
 
             return connection;
         }
+
+        private const int _copiesFrom = 5;
+        private const int _copiesTo = _copiesFrom + 100;
 
         private static void AddCommonOptions(CommandLineApplication app, bool subscriber)
         {
@@ -615,7 +672,7 @@ namespace MqttAgent
                     "-a|--application",
                     "A unique name for the application instance. Overrides the setting in the connection configuration.",
                     CommandOptionType.SingleValue);
-             
+
                 app.Option(
                     "-n|--nameplate <NameplaceFilePath>",
                     "The file containing the the nameplate information provided by the publisher.",
@@ -647,7 +704,7 @@ namespace MqttAgent
             {
                 DatasetFilePath = app.GetOption("d", "config/datasets"),
                 NameplateFilePath = app.GetOption("n", "config/nameplate.json"),
-                ConnectionFilePath = app.GetOption("c", $"config/{((subscriber)?"subscriber":"publisher")}-connection.json"),
+                ConnectionFilePath = app.GetOption("c", $"config/{((subscriber) ? "subscriber" : "publisher")}-connection.json"),
                 BrokerUrl = app.GetOption("b", "mqtt://localhost:1883"),
                 UserName = app.GetOption("u", ""),
                 Password = app.GetOption("p", ""),
@@ -659,7 +716,7 @@ namespace MqttAgent
             return options;
         }
 
-        private static void HandleKeyPress(Func<ConsoleKeyInfo,bool> handler = null)
+        private static void HandleKeyPress(Func<ConsoleKeyInfo, bool> handler = null)
         {
             do
             {
@@ -667,7 +724,7 @@ namespace MqttAgent
                 {
                     Thread.Sleep(250);
                 }
-                
+
                 var key = Console.ReadKey(true);
 
                 if (key.KeyChar == 'x' || key.KeyChar == 'X')

@@ -1,7 +1,7 @@
-﻿using Newtonsoft.Json;
-using Opc.Ua;
-using System;
+﻿using System;
 using System.IO;
+using Newtonsoft.Json;
+using Opc.Ua;
 
 namespace MqttAgent
 {
@@ -12,8 +12,8 @@ namespace MqttAgent
         private VendorNameplate m_nameplate;
 
         public VendorNameplateManager(
-            ushort datasetId, 
-            DataSetMetaDataType metadata, 
+            ushort datasetId,
+            DataSetMetaDataType metadata,
             string filePath,
             string applicationId)
         {
@@ -61,7 +61,7 @@ namespace MqttAgent
                 return null;
             }
 
-            if ( m_nameplate == null)
+            if (m_nameplate == null)
             {
                 var text = File.ReadAllText(m_filePath ?? "config/nameplate.json");
                 text = text.Replace("[ApplicationId]", m_applicationId ?? System.Net.Dns.GetHostName());
@@ -74,7 +74,7 @@ namespace MqttAgent
             {
                 default: { return null; }
 
-                case "Manufacturer": { value = new DataValue() { WrappedValue = m_nameplate.Manufacturer }; break; }
+                case "Manufacturer": { value = new DataValue() { WrappedValue = m_nameplate.Manufacturer + DataSet.Name }; break; }
                 case "ManufacturerUri": { value = new DataValue() { WrappedValue = m_nameplate.ManufacturerUri }; break; }
                 case "ProductInstanceUri": { value = new DataValue() { WrappedValue = m_nameplate.ProductInstanceUri }; break; }
                 case "Model": { value = new DataValue() { WrappedValue = m_nameplate.Model }; break; }

@@ -3,6 +3,10 @@
     "MqttAgent": {
       "commandName": "Project",
       "commandLineArgs": "subscribe -b=mqtt://192.168.1.18:1883 -p=mydevice:one -g=Gate1-Full"
+    },
+    "Profile 1": {
+      "commandName": "Project",
+      "commandLineArgs": "publish"
     }
   }
 }
